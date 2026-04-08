@@ -14,7 +14,7 @@ all: $(USER_TARGETS) module
 module: monitor.ko
 
 engine: engine.c monitor_ioctl.h
-	gcc -O2 -Wall -Wextra -o engine engine.c -lpthread
+	gcc -O2 -Wall -Wextra -pthread -o engine engine.c
 
 memory_hog: memory_hog.c
 	gcc -O2 -Wall $(WORKLOAD_LDFLAGS) -o memory_hog memory_hog.c
@@ -33,6 +33,6 @@ clean:
 	rm -f $(USER_TARGETS) *.o *.mod *.mod.c *.symvers *.order
 	rm -f *.log
 	rm -rf logs
-	rm -f /tmp/mini_runtime.sock
+	rm -f /tmp/runtime.sock
 
 .PHONY: all module clean
