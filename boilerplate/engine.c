@@ -1330,13 +1330,14 @@ static void *signal_thread(void *arg)
             continue;
         }
     }
+    return NULL;
 }
 
 static void cmd_start(const char *cmd_str, int client_fd)
 {
     start_request_t req;
     char error[256];
-    char response[256];
+    char response[512];
     pid_t pid;
 
     if (parse_start_request(cmd_str, &req, error, sizeof(error)) != 0) {
@@ -1368,7 +1369,7 @@ static void cmd_run(const char *cmd_str, int client_fd)
     start_request_t req;
     container_t finished;
     char error[256];
-    char response[256];
+    char response[512];
 
     if (parse_start_request(cmd_str, &req, error, sizeof(error)) != 0) {
         snprintf(response, sizeof(response), "ERROR %s\n", error);
@@ -1464,7 +1465,7 @@ static void cmd_logs(const char *container_id, int client_fd)
     snprintf(log_path, sizeof(log_path), "%s/%s.log", LOG_DIR, container_id);
     log_file = fopen(log_path, "rb");
     if (!log_file) {
-        char response[256];
+        char response[512];
 
         snprintf(response, sizeof(response), "ERROR logs not found for %s\n", container_id);
         write_response(client_fd, response);

@@ -19,7 +19,6 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/wait.h>
-#include <stdarg.h>
 
 #include "monitor_ioctl.h"
 
