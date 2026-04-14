@@ -195,20 +195,25 @@ static void kill_process(const char *container_id,
 static void timer_callback(struct timer_list *t)
 {
     struct monitor_entry *entry, *tmp;
+    int entry_count = 0;
 
     mutex_lock(&monitor_lock);
 
     list_for_each_entry_safe(entry, tmp, &monitor_list, list) {
         long rss = get_rss_bytes(entry->pid);
+        entry_count++;
 
         /* Process exited */
         if (rss < 0) {
+            enqueue_monitor_log("[container_monitor] Process exited container=%s pid=%d",
+                                entry->container_id,
+                                entry->pid);
             list_del(&entry->list);
             kfree(entry);
             continue;
         }
 
-        /* Hard limit check */
+        /* Hard limit check - must come before soft limit */
         if (rss > entry->hard_limit_bytes) {
             kill_process(entry->container_id,
                          entry->pid,
@@ -220,7 +225,7 @@ static void timer_callback(struct timer_list *t)
             continue;
         }
 
-        /* Soft limit check */
+        /* Soft limit check - only log once per threshold crossing */
         if (rss > entry->soft_limit_bytes) {
             if (!entry->soft_limit_exceeded) {
                 log_soft_limit_event(entry->container_id,
@@ -230,8 +235,23 @@ static void timer_callback(struct timer_list *t)
                 entry->soft_limit_exceeded = true;
             }
         } else {
-            /* Reset if memory goes back down */
-            entry->soft_limit_exceeded = false;
+            /* Reset flag if memory drops back below soft-limit */
+            if (entry->soft_limit_exceeded) {
+                enqueue_monitor_log("[container_monitor] Memory OK container=%s pid=%d rss=%ld limit=%lu",
+                                    entry->container_id,
+                                    entry->pid,
+                                    rss,
+                                    entry->soft_limit_bytes);
+                entry->soft_limit_exceeded = false;
+            }
+        }
+    }
+
+    if (entry_count == 0) {
+        /* Log periodic status when monitoring (helps validate timer is running with data) */
+        static int heartbeat_count = 0;
+        if (heartbeat_count++ % 10 == 0) {
+            enqueue_monitor_log("[container_monitor] Timer heartbeat - no containers monitored");
         }
     }
 
@@ -253,18 +273,27 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         if (copy_from_user(&req, (struct monitor_request __user *)arg, sizeof(req)))
             return -EFAULT;
 
+        /* Log with clear formatting for visibility in dmesg */
         enqueue_monitor_log("[container_monitor] Registering container=%s pid=%d soft=%lu hard=%lu",
                             req.container_id,
                             req.pid,
                             req.soft_limit_bytes,
                             req.hard_limit_bytes);
 
-        if (req.soft_limit_bytes > req.hard_limit_bytes)
+        /* Validate soft-limit <= hard-limit */
+        if (req.soft_limit_bytes > req.hard_limit_bytes) {
+            enqueue_monitor_log("[container_monitor] Registration FAILED: soft-limit > hard-limit container=%s",
+                                req.container_id);
             return -EINVAL;
+        }
 
+        /* Allocate and initialize entry */
         entry = kmalloc(sizeof(*entry), GFP_KERNEL);
-        if (!entry)
+        if (!entry) {
+            enqueue_monitor_log("[container_monitor] Registration FAILED: kmalloc error container=%s",
+                                req.container_id);
             return -ENOMEM;
+        }
 
         entry->pid = req.pid;
         strncpy(entry->container_id, req.container_id, sizeof(entry->container_id));
@@ -273,9 +302,14 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         entry->hard_limit_bytes = req.hard_limit_bytes;
         entry->soft_limit_exceeded = false;
 
+        /* Add to monitoring list */
         mutex_lock(&monitor_lock);
         list_add(&entry->list, &monitor_list);
         mutex_unlock(&monitor_lock);
+
+        enqueue_monitor_log("[container_monitor] Registration SUCCESS container=%s pid=%d",
+                            req.container_id,
+                            req.pid);
 
         return 0;
     }
@@ -306,6 +340,11 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         }
 
         mutex_unlock(&monitor_lock);
+
+        if (found)
+            enqueue_monitor_log("[container_monitor] Unregister SUCCESS container=%s pid=%d",
+                                req.container_id,
+                                req.pid);
 
         return found ? 0 : -ENOENT;
     }

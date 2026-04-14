@@ -44,19 +44,29 @@ int main(int argc, char *argv[])
     const useconds_t sleep_us = (argc > 2) ? parse_sleep_ms(argv[2], 1000U) : 1000U * 1000U;
     const size_t chunk_bytes = chunk_mb * 1024U * 1024U;
     int count = 0;
+    char *mem;
+
+    printf("Starting memory_hog: chunk_size=%zuMB interval=%luus\n", chunk_mb, (unsigned long)sleep_us);
+    fflush(stdout);
 
     while (1) {
-        char *mem = malloc(chunk_bytes);
+        mem = malloc(chunk_bytes);
         if (!mem) {
-            printf("malloc failed after %d allocations\n", count);
-            break;
+            printf("allocation=%d malloc failed after %d allocations, sleeping indefinitely\n", 
+                   count, count);
+            fflush(stdout);
+            /* Sleep indefinitely instead of exiting so container can be monitored/killed */
+            while (1) sleep(1);
         }
 
+        /* Touch every page to ensure RSS actually grows */
         memset(mem, 'A', chunk_bytes);
+        
         count++;
         printf("allocation=%d chunk=%zuMB total=%zuMB\n",
                count, chunk_mb, (size_t)count * chunk_mb);
         fflush(stdout);
+        
         usleep(sleep_us);
     }
 
