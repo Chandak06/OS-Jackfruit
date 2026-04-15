@@ -228,6 +228,12 @@ static void timer_callback(struct timer_list *t)
         /* Soft limit check - only log once per threshold crossing */
         if (rss > entry->soft_limit_bytes) {
             if (!entry->soft_limit_exceeded) {
+                /* Direct print for immediate visibility */
+                printk(KERN_WARNING "[container_monitor] SOFT LIMIT TRIGGERED: container=%s pid=%d rss=%ld bytes > threshold=%ld bytes\n",
+                       entry->container_id,
+                       entry->pid,
+                       rss,
+                       entry->soft_limit_bytes);
                 log_soft_limit_event(entry->container_id,
                                      entry->pid,
                                      entry->soft_limit_bytes,
