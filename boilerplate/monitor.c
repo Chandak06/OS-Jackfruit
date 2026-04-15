@@ -213,8 +213,13 @@ static void timer_callback(struct timer_list *t)
             continue;
         }
 
-        /* Hard limit check - must come before soft limit */
-        if (rss > entry->hard_limit_bytes) {
+        /* Hard limit check - must come before soft limit (use >= to trigger at exactly the limit) */
+        if (rss >= entry->hard_limit_bytes) {
+            printk(KERN_ERR "[container_monitor] HARD LIMIT TRIGGERED: container=%s pid=%d rss=%ld bytes >= hard_limit=%ld bytes - SENDING SIGKILL\n",
+                   entry->container_id,
+                   entry->pid,
+                   rss,
+                   entry->hard_limit_bytes);
             kill_process(entry->container_id,
                          entry->pid,
                          entry->hard_limit_bytes,
@@ -225,8 +230,8 @@ static void timer_callback(struct timer_list *t)
             continue;
         }
 
-        /* Soft limit check - only log once per threshold crossing */
-        if (rss > entry->soft_limit_bytes) {
+        /* Soft limit check - only log once per threshold crossing (use >= to trigger at exactly the limit) */
+        if (rss >= entry->soft_limit_bytes) {
             if (!entry->soft_limit_exceeded) {
                 /* Direct print for immediate visibility */
                 printk(KERN_WARNING "[container_monitor] SOFT LIMIT TRIGGERED: container=%s pid=%d rss=%ld bytes > threshold=%ld bytes\n",
@@ -280,6 +285,11 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
             return -EFAULT;
 
         /* Log with clear formatting for visibility in dmesg */
+        printk(KERN_INFO "[container_monitor] REGISTER REQUEST: container=%s pid=%d soft=%lu bytes hard=%lu bytes\n",
+               req.container_id,
+               req.pid,
+               req.soft_limit_bytes,
+               req.hard_limit_bytes);
         enqueue_monitor_log("[container_monitor] Registering container=%s pid=%d soft=%lu hard=%lu",
                             req.container_id,
                             req.pid,
@@ -288,6 +298,10 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
         /* Validate soft-limit <= hard-limit */
         if (req.soft_limit_bytes > req.hard_limit_bytes) {
+            printk(KERN_ERR "[container_monitor] Registration FAILED: soft-limit (%lu) > hard-limit (%lu) for container=%s\n",
+                   req.soft_limit_bytes,
+                   req.hard_limit_bytes,
+                   req.container_id);
             enqueue_monitor_log("[container_monitor] Registration FAILED: soft-limit > hard-limit container=%s",
                                 req.container_id);
             return -EINVAL;
@@ -296,6 +310,8 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         /* Allocate and initialize entry */
         entry = kmalloc(sizeof(*entry), GFP_KERNEL);
         if (!entry) {
+            printk(KERN_ERR "[container_monitor] Registration FAILED: kmalloc error for container=%s\n",
+                   req.container_id);
             enqueue_monitor_log("[container_monitor] Registration FAILED: kmalloc error container=%s",
                                 req.container_id);
             return -ENOMEM;
@@ -313,6 +329,11 @@ static long monitor_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
         list_add(&entry->list, &monitor_list);
         mutex_unlock(&monitor_lock);
 
+        printk(KERN_INFO "[container_monitor] Registration SUCCESS: container=%s pid=%d soft=%lu hard=%lu (now monitoring)\n",
+               req.container_id,
+               req.pid,
+               req.soft_limit_bytes,
+               req.hard_limit_bytes);
         enqueue_monitor_log("[container_monitor] Registration SUCCESS container=%s pid=%d",
                             req.container_id,
                             req.pid);
@@ -397,6 +418,8 @@ static struct file_operations fops = {
 /* --------------------------------------------------------------- */
 static int __init monitor_init(void)
 {
+    printk(KERN_INFO "[container_monitor] Initializing kernel module...\n");
+    
     monitor_logq.head = 0;
     monitor_logq.tail = 0;
     monitor_logq.count = 0;
@@ -405,11 +428,15 @@ static int __init monitor_init(void)
     init_waitqueue_head(&monitor_logq.waitq);
 
     monitor_log_thread = kthread_run(monitor_log_consumer, NULL, "monitor_log_consumer");
-    if (IS_ERR(monitor_log_thread))
+    if (IS_ERR(monitor_log_thread)) {
+        printk(KERN_ERR "[container_monitor] Failed to start log consumer thread\n");
         return PTR_ERR(monitor_log_thread);
+    }
 
-    if (alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME) < 0)
+    if (alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME) < 0) {
+        printk(KERN_ERR "[container_monitor] Failed to allocate character device region\n");
         goto err_stop_logger;
+    }
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
     cl = class_create(DEVICE_NAME);
@@ -417,11 +444,13 @@ static int __init monitor_init(void)
     cl = class_create(THIS_MODULE, DEVICE_NAME);
 #endif
     if (IS_ERR(cl)) {
+        printk(KERN_ERR "[container_monitor] Failed to create device class\n");
         unregister_chrdev_region(dev_num, 1);
         goto err_stop_logger;
     }
 
     if (IS_ERR(device_create(cl, NULL, dev_num, NULL, DEVICE_NAME))) {
+        printk(KERN_ERR "[container_monitor] Failed to create device /dev/%s\n", DEVICE_NAME);
         class_destroy(cl);
         unregister_chrdev_region(dev_num, 1);
         goto err_stop_logger;
@@ -429,6 +458,7 @@ static int __init monitor_init(void)
 
     cdev_init(&c_dev, &fops);
     if (cdev_add(&c_dev, dev_num, 1) < 0) {
+        printk(KERN_ERR "[container_monitor] Failed to add character device\n");
         device_destroy(cl, dev_num);
         class_destroy(cl);
         unregister_chrdev_region(dev_num, 1);
@@ -438,6 +468,8 @@ static int __init monitor_init(void)
     timer_setup(&monitor_timer, timer_callback, 0);
     mod_timer(&monitor_timer, jiffies + CHECK_INTERVAL_SEC * HZ);
 
+    printk(KERN_INFO "[container_monitor] Module loaded successfully. Device: /dev/%s (major:%d minor:0)\n", 
+           DEVICE_NAME, MAJOR(dev_num));
     enqueue_monitor_log("[container_monitor] Module loaded. Device: /dev/%s", DEVICE_NAME);
     return 0;
 
