@@ -919,10 +919,15 @@ static int register_container_monitor_locked(container_t *cont)
     struct monitor_request req;
     int fd = open("/dev/container_monitor", O_RDWR);
 
-    if (fd < 0)
+    if (fd < 0) {
+        fprintf(stderr, "[engine] ERROR: Cannot open /dev/container_monitor: %s (errno=%d)\n", 
+                strerror(errno), errno);
+        fprintf(stderr, "[engine] FIX: sudo insmod boilerplate/monitor.ko && sudo chmod 666 /dev/container_monitor\n");
         return -1;
+    }
 
     if (set_fd_cloexec(fd) != 0) {
+        fprintf(stderr, "[engine] ERROR: Failed to set FD_CLOEXEC on monitor device\n");
         close(fd);
         return -1;
     }
@@ -933,11 +938,17 @@ static int register_container_monitor_locked(container_t *cont)
     req.hard_limit_bytes = cont->hard_limit_bytes;
     safe_copy(req.container_id, sizeof(req.container_id), cont->id);
 
+    fprintf(stderr, "[engine] DEBUG: Registering with monitor: container=%s pid=%d soft=%lu hard=%lu\n",
+            req.container_id, req.pid, req.soft_limit_bytes, req.hard_limit_bytes);
+
     if (ioctl(fd, MONITOR_REGISTER, &req) != 0) {
+        fprintf(stderr, "[engine] ERROR: MONITOR_REGISTER ioctl failed: %s (errno=%d)\n",
+                strerror(errno), errno);
         close(fd);
         return -1;
     }
 
+    fprintf(stderr, "[engine] SUCCESS: Container registered with kernel monitor\n");
     cont->monitor_fd = fd;
     return 0;
 }
